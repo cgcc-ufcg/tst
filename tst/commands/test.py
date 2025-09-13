@@ -427,6 +427,7 @@ def get_options_from_cli_and_context(directory):
     parser.add_argument('-V', '--verbose', action="count", default=0, help='more verbose output')
     parser.add_argument('-q', '--quiet', action="store_true", default=False, help='suppress non-essential output')
     parser.add_argument('-T', '--timeout', type=int, default=TIMEOUT_DEFAULT, help='stop execution at TIMEOUT seconds')
+    parser.add_argument('--max-threads', type=int, default=os.cpu_count(), help='max number of threads to run in parallel')
     parser.add_argument('-t', '--test-sources', nargs="+", default=[], help='read tests from TEST_SOURCES')
     parser.add_argument('-f', '--output-format', type=str, choices=['default', 'json', 'brief', 'log'], help='choose report format')
     parser.add_argument('-d', '--diff', action="store_true", default=False, help='print diff output for failed io tests')
@@ -507,6 +508,9 @@ def collect_test_cases(test_sources):
     return all_test_cases
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+
 def run_tests_in_parallel(test_cases, test_suites, subjects, options):
     def results_reader(q):
         # read queue
@@ -551,22 +555,11 @@ def run_tests_in_parallel(test_cases, test_suites, subjects, options):
 
     # run tests threads
     options.verbose and print(f"* starting test threads", file=sys.stderr)
-    threads = []
-    subject_threads = []
-    last_subject = None
-    for subject, testcase in itertools.product(subjects, test_cases):
-        testrun = TestRun(TestSubject(subject), testcase)
-        test_thread = threading.Thread(target=test_runner, args=(testrun, q))
-        threads.append(test_thread)
-        subject_threads.append(test_thread)
-        if subject != last_subject:
-            for t in subject_threads: t.start()
-            subject_threads = []
-        last_subject = subject
-    else:
-        for t in subject_threads: t.start()
+    with ThreadPoolExecutor(max_workers=options.max_threads) as executor:
+        for subject, testcase in itertools.product(subjects, test_cases):
+            testrun = TestRun(TestSubject(subject), testcase)
+            executor.submit(test_runner, testrun, q)
 
-    for t in threads: t.join()
     options.verbose and print(f"* all test threads finished", file=sys.stderr)
     q.join()
     options.verbose and print(f"* results reader thread finished", file=sys.stderr)
